@@ -45,6 +45,7 @@ from pydantic import BaseModel
 
 import config
 from buildable_area import post_buildable_area, poll_s3_result, calculate_buildable_acres
+from playwright_flow import _parse_mwp_or_kw, _parse_bare_float
 
 
 # ── Shared sidebar/map selectors (hardcoded — not user-configurable) ──────────
@@ -244,90 +245,29 @@ class _ParcelResult(BaseModel):
     buildable_area_acres: float | None = None
 
 
-# ── kW parsing helper ─────────────────────────────────────────────────────────
-
-
-def _parse_mwp_or_kw(text: str) -> float | None:
-    """Parse a kW value from text like '35.00 MWp', '19,430 kWp', '35 kW'."""
-    text = text.strip().replace(",", "")
-    m = re.search(r"([\d.]+)\s*(MWp|kWp|MW|kW)", text, re.IGNORECASE)
-    if not m:
-        return None
-    val = float(m.group(1))
-    if m.group(2).upper().startswith("M"):
-        val *= 1000
-    return round(val, 1)
-
-
-def _parse_bare_float(text: str) -> float | None:
-    """
-    Fallback: parse a bare number (no unit) as kW.
-
-    Used when the DOM element contains only a raw number like '3.71'.
-    Returns None if text cannot be parsed as a float.
-    """
-    try:
-        return float(text.strip().replace(",", ""))
-    except (ValueError, AttributeError):
-        return None
-
-
-# ── Post-agent Playwright verification ───────────────────────────────────────
-
-
-async def _read_kw_from_page(page) -> float | None:
-    """
-    Extract the installed capacity kW value from the current page state.
-
-    Tries the configured CSS selector first, then falls back to a JS text scan
-    for any leaf element whose text matches an MWp/kWp number pattern.
-    """
-    # Strategy 1: use the configured selector (may use CSS hash classes)
-    if config.SEL_CAPACITY_KW and config.SEL_CAPACITY_KW != "TODO":
-        try:
-            text = await page.text_content(config.SEL_CAPACITY_KW, timeout=5_000)
-            if text:
-                kw = _parse_mwp_or_kw(text)
-                if kw is not None:
-                    return kw
-        except Exception:
-            pass
-
-    # Strategy 2: JS scan for any leaf element matching number + MWp/kWp
-    result = await page.evaluate("""() => {
-        for (const el of document.querySelectorAll('*')) {
-            if (el.children.length === 0) {
-                const t = el.textContent.trim();
-                if (/^[\\d,]+\\.\\d+\\s*[Mm][Ww][Pp]?$/.test(t) ||
-                    /^[\\d,]+\\.\\d+\\s*[Kk][Ww][Pp]?$/.test(t)) {
-                    return t;
-                }
-            }
-        }
-        return null;
-    }""")
-    if result:
-        return _parse_mwp_or_kw(result)
-    return None
-
-
-async def _verify_and_screenshot(
+async def _run_playwright_for_parcel(
     storage_state: dict,
     parcel_id: str,
+    project_url: str,
     screenshot_dir: Path,
-    project_url: str | None = None,
-) -> tuple[float | None, str | None]:
+) -> _ParcelResult:
     """
-    After the browser-use agent closes its session, open a fresh Playwright page
-    to independently verify the installed capacity and save a screenshot.
+    Pure Playwright implementation replacing the browser-use vision agent.
 
-    Flow: navigate to project → click New Analysis → wait for kW → screenshot → parse.
-
-    Returns (verified_kw, screenshot_path) — both None on any error.
+    Steps:
+      1. Launch Playwright browser using storage_state
+      2. Navigate to project_url
+      3. open_buildable_area_panel → right-click parcel → Buildable Area panel
+      4. run_buildable_area_and_copy → Run → extract acres → Copy to project
+      5. click_new_analysis_and_read_kw → New Analysis → read kW
+      6. Screenshot and return _ParcelResult
     """
     from playwright.async_api import async_playwright
-
-    screenshot_path = str(screenshot_dir / f"{parcel_id}_verified.png")
+    from playwright_flow import (
+        open_buildable_area_panel,
+        run_buildable_area_and_copy,
+        click_new_analysis_and_read_kw,
+    )
 
     try:
         async with async_playwright() as pw:
@@ -335,63 +275,37 @@ async def _verify_and_screenshot(
             ctx = await browser.new_context(storage_state=storage_state)
             page = await ctx.new_page()
             try:
-                await page.goto(project_url or config.PROJECT_URL)
+                await page.goto(project_url)
                 await page.wait_for_load_state("networkidle")
 
-                # Open New Analysis panel
-                try:
-                    await page.wait_for_selector(
-                        config.SEL_NEW_ANALYSIS, timeout=20_000
-                    )
-                    await page.click(config.SEL_NEW_ANALYSIS)
-                except Exception:
-                    # Fallback: role-based lookup
-                    btn = page.get_by_role("button", name=re.compile("new anal", re.I))
-                    await btn.click(timeout=20_000)
+                await open_buildable_area_panel(page, parcel_id)
+                acres = await run_buildable_area_and_copy(page)
+                kw = await click_new_analysis_and_read_kw(page)
 
-                # Wait for kW value to be non-zero, up to 60s
-                try:
-                    await page.wait_for_function(
-                        """() => {
-                            for (const el of document.querySelectorAll('*')) {
-                                if (el.children.length === 0) {
-                                    const t = el.textContent.trim();
-                                    if (/[1-9][\\d,.]*\\s*[MmKk][Ww][Pp]?/.test(t)) return true;
-                                }
-                            }
-                            return false;
-                        }""",
-                        timeout=60_000,
-                    )
-                except Exception:
-                    pass  # screenshot whatever state we're in
-
-                await page.screenshot(path=screenshot_path)
-                kw = await _read_kw_from_page(page)
-                return kw, screenshot_path
-
+                await page.screenshot(
+                    path=str(screenshot_dir / f"{parcel_id}_result.png")
+                )
+                print(
+                    f"[capacity] {parcel_id}: playwright → {kw} kW, {acres} acres"
+                )
+                return _ParcelResult(installed_capacity_kw=kw, buildable_area_acres=acres)
             finally:
                 await page.close()
                 await browser.close()
-
     except Exception as exc:
-        print(f"[capacity] {parcel_id}: verification screenshot failed — {exc}")
-        return None, None
+        print(f"[capacity] {parcel_id}: playwright error — {exc}")
+        return _ParcelResult()
 
 
-async def _run_agent_for_parcel(
+async def _run_agent_for_parcel_legacy(
     storage_state: dict,
     parcel_id: str,
     project_url: str,
     screenshot_dir: Path,
 ) -> _ParcelResult:
     """
-    Launch a browser-use vision agent to:
-      1. Navigate to the Glint project page
-      2. Click the parcel row in the left sidebar
-      3. Click "Run Buildable Area" and wait for completion
-      4. Click "New Analysis" and wait for the kW value
-      5. Return structured output
+    Legacy browser-use vision agent (kept for fallback testing).
+    Use _run_playwright_for_parcel for the main flow.
 
     Uses ChatBrowserUse() which reads BROWSER_USE_API_KEY from the environment.
     """
@@ -498,7 +412,7 @@ async def get_all_installed_capacities(
     parcels: list[dict],
 ) -> None:
     """
-    Multi-parcel Phase 3 (browser-use vision).
+    Multi-parcel Phase 3 (pure Playwright).
 
     Each parcel must have 'project_id' and 'project_url' set (populated by
     main.py Phase 1 from PROJECT_URL_1 .. PROJECT_URL_N).  Each project
@@ -507,12 +421,10 @@ async def get_all_installed_capacities(
     For each parcel:
       - Fetches parcel geometry via the objects API (for the API buildable area job)
       - Fires a buildable-area-async API call in parallel (precise S3 acres)
-      - Runs a browser-use vision agent to drive the UI: right-click → Buildable
-        Area → Run → Copy to project → New Analysis → read kW
-      - Independently verifies the kW with a fresh Playwright session + screenshot
+      - Runs a pure Playwright flow: right-click → Buildable Area → Run →
+        Copy to project → New Analysis → read kW
 
     Mutates each parcel dict in-place.
-    BROWSER_USE_API_KEY must be set in the environment.
     """
     from objects import get_project_objects, get_parcels
 
@@ -575,33 +487,15 @@ async def get_all_installed_capacities(
         project_url = parcel.get("project_url") or config.PROJECT_URL
         print(f"[capacity] [{i}/{len(parcels)}] {parcel_id}  ({project_url.split('/')[-1].split('?')[0]})")
 
-        agent_result = await _run_agent_for_parcel(
+        result = await _run_playwright_for_parcel(
             storage_state, parcel_id, project_url, screenshot_dir
         )
 
-        # Independently verify kW and save a screenshot using a fresh Playwright session.
-        verified_kw, verify_screenshot = await _verify_and_screenshot(
-            storage_state, parcel_id, screenshot_dir, project_url=project_url
-        )
+        kw = result.installed_capacity_kw
 
-        agent_kw = agent_result.installed_capacity_kw
-        if verified_kw is not None and agent_kw is not None:
-            denom = max(verified_kw, agent_kw, 1.0)
-            kw_match = abs(verified_kw - agent_kw) / denom < 0.05
-        else:
-            kw_match = False
-
-        if verified_kw is not None:
-            print(
-                f"[capacity] {parcel_id}: verified={verified_kw} kW  "
-                f"agent={agent_kw} kW  match={'✓' if kw_match else '✗ MISMATCH'}"
-            )
-        else:
-            print(f"[capacity] {parcel_id}: verification failed — using agent value")
-
-        # Collect the pre-fired API result (prefer over agent value — precise UTM).
+        # Collect the pre-fired API result (prefer over Playwright value — precise UTM).
         api_acres = await api_tasks[parcel_id]
-        buildable_acres = api_acres if api_acres is not None else agent_result.buildable_area_acres
+        buildable_acres = api_acres if api_acres is not None else result.buildable_area_acres
         total_acres = parcel.get("total_area_acres") or 0
 
         parcel["buildable_area_acres"] = buildable_acres
@@ -610,8 +504,7 @@ async def get_all_installed_capacities(
             if buildable_acres is not None and total_acres
             else None
         )
-        # Use the verified kW if available; fall back to agent value.
-        parcel["installed_capacity_kw"] = verified_kw if verified_kw is not None else agent_kw
-        parcel["kw_agent_reported"] = agent_kw
-        parcel["kw_verified"] = verified_kw   # float | None — the independent re-read
-        parcel["kw_match"] = kw_match         # bool — agent and verified within 5%
+        parcel["installed_capacity_kw"] = kw
+        parcel["kw_agent_reported"] = kw      # kept for CSV compatibility
+        parcel["kw_verified"] = kw            # single Playwright source — no dual-read
+        parcel["kw_match"] = kw is not None   # True when kW was successfully read
