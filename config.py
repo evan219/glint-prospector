@@ -1,6 +1,11 @@
 """
 Central configuration — loaded once at startup.
-All known IDs and API constants are sourced from HAR analysis (Feb 2026).
+All known IDs, API constants, and constraint values sourced from HAR analysis (Feb 2026).
+
+Constraint note: The UI presents a "Constraints Profile" dropdown (e.g. "BESS Capacity")
+that auto-fills constraint values in the browser before sending the buildable-area POST.
+There is no separate profile-fetch API — the constraints are always sent inline.
+The values below are the exact payload extracted from the "BESS Capacity" profile HAR.
 """
 import os
 from dotenv import load_dotenv
@@ -32,29 +37,45 @@ BBOX = {
     "lon_max": float(os.getenv("BBOX_LON_MAX", -77.70)),
 }
 
-# --- Buildable area constraints (from HAR) ---
-# Copy the full constraints array from your HAR for your profile.
+# --- Buildable area constraints — "BESS Capacity" profile (exact values from HAR) ---
+# These are sent inline in every buildable-area-async POST. The UI profile dropdown
+# ("BESS Capacity") simply auto-fills these same values — there is no profile ID param.
 BUILDABLE_CONSTRAINTS = [
     {
         "flag": "steepness",
         "layerId": "steepness",
         "inclusion": False,
-        "limits": {"north": 2, "south": 9, "east": 5, "west": 5},
+        "limits": {
+            "west": 5.710593137499643,
+            "east": 5.710593137499643,
+            "south": 5.710593137499643,
+            "north": 5.710593137499643,
+        },
         "country": PACKAGE_ID_STATE,
     },
     {
         "flag": "wetlands",
         "layerId": "wetlands",
         "inclusion": False,
-        "buffer": 30.48,
-        "sources": [],  # populate from your HAR
+        "buffer": 30.48,          # 100 ft setback
+        "version": 20251001,
+        "sources": [
+            "EstuarineandMarineDeepwater",
+            "EstuarineandMarineWetland",
+            "FreshwaterEmergentWetland",
+            "FreshwaterForestedShrubWetland",
+            "FreshwaterPond",
+            "Lake",
+            "Riverine",
+        ],
         "country": PACKAGE_ID_STATE,
     },
     {
         "flag": "nyseg_reg_bess_analysis",
         "layerId": "nyseg_reg_bess_analysis",
-        "inclusion": True,
-        "buffer": 304.8,
+        "inclusion": True,        # inclusion = within 1000 ft of qualifying feeders
+        "buffer": 304.8,          # 1000 ft
+        "version": 20260109,
         "sources": [
             "hostingcapacity_1_00_1_49",
             "hostingcapacity_1_50_1_99",
@@ -66,13 +87,27 @@ BUILDABLE_CONSTRAINTS = [
     },
     {
         "flag": "parcels",
-        "version": int(PARCEL_VERSION),
-        "minArea": 101171.41,
-        "maxArea": 809371.28,
+        "version": 20250617,
+        "minArea": 101171.41056000002,   # ~25 acres in sq meters
+        "maxArea": 809371.2844800001,    # ~200 acres in sq meters
         "sources": ["main"],
         "country": PACKAGE_ID_STATE,
     },
 ]
+
+# --- Phase 3: New Analysis configuration ---
+# Installed capacity is computed client-side by JS bundles after "New Analysis" renders.
+# DEFAULT_ANALYSIS_CONFIG_NAME must match a name returned by GET /api/configurations.
+# Options from HAR: "Max Spec. Yield - Fixed 2P", "Max Spec. Yield - Tracker 2P",
+#                   "Max DC - Tracker 2P", "East-west 1P", "Vertical AgriVoltaics - Landscape"
+DEFAULT_ANALYSIS_CONFIG_NAME = os.getenv(
+    "GLINT_ANALYSIS_CONFIG", "Max Spec. Yield - Fixed 2P"
+)
+# Selector for the rendered installed capacity kW value in the DOM.
+# Update after inspecting the "New Analysis" result panel in DevTools.
+INSTALLED_CAPACITY_SELECTOR = os.getenv(
+    "GLINT_CAPACITY_SELECTOR", "[data-testid='installed-capacity']"
+)
 
 # --- Concurrency ---
 MAX_CONCURRENT_PARCEL_CALLS = 20
@@ -82,3 +117,4 @@ S3_POLL_MAX_ATTEMPTS = 60  # 5 min timeout
 # --- Output ---
 OUTPUT_DIR = "output"
 OUTPUT_CSV = f"{OUTPUT_DIR}/parcels.csv"
+SCREENSHOT_DIR = f"{OUTPUT_DIR}/screenshots"
