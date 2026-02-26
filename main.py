@@ -67,7 +67,15 @@ async def main():
         "buildable_area_acres",
         "buildable_pct",
         "installed_capacity_kw",
+        "kw_agent_reported",
+        "kw_verified",
+        "kw_match",
     ]
+    # Ensure new columns exist even if Phase 3 was skipped.
+    for p in parcels:
+        p.setdefault("kw_agent_reported", None)
+        p.setdefault("kw_verified", None)
+        p.setdefault("kw_match", None)
     df = pd.DataFrame(parcels)[column_order]
     df.to_csv(config.OUTPUT_CSV, index=False)
     print(f"Saved {len(df)} parcels to {config.OUTPUT_CSV}")
