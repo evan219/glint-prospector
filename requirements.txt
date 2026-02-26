@@ -1,0 +1,6 @@
+playwright>=1.44.0
+httpx[asyncio]>=0.27.0
+mapbox-vector-tile>=2.0.3
+shapely>=2.0.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
