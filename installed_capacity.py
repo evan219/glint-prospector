@@ -315,6 +315,7 @@ async def _verify_and_screenshot(
     storage_state: dict,
     parcel_id: str,
     screenshot_dir: Path,
+    project_url: str | None = None,
 ) -> tuple[float | None, str | None]:
     """
     After the browser-use agent closes its session, open a fresh Playwright page
@@ -334,7 +335,7 @@ async def _verify_and_screenshot(
             ctx = await browser.new_context(storage_state=storage_state)
             page = await ctx.new_page()
             try:
-                await page.goto(config.PROJECT_URL)
+                await page.goto(project_url or config.PROJECT_URL)
                 await page.wait_for_load_state("networkidle")
 
                 # Open New Analysis panel
@@ -381,6 +382,7 @@ async def _verify_and_screenshot(
 async def _run_agent_for_parcel(
     storage_state: dict,
     parcel_id: str,
+    project_url: str,
     screenshot_dir: Path,
 ) -> _ParcelResult:
     """
@@ -409,41 +411,48 @@ async def _run_agent_for_parcel(
         keep_alive=False,
     )
 
+    playwright_log = str(Path(config.SCREENSHOT_DIR) / f"{parcel_id}_playwright_log.md")
     task = f"""
 You are automating a solar prospecting workflow in the Glint Solar web app.
-The project page already has only one parcel visible: "Parcel {parcel_id}".
+This project has exactly ONE parcel: "Parcel {parcel_id}". No visibility toggling needed.
 
-Complete ALL of these steps in order — do not skip any:
+Complete ALL steps in order:
 
-1. Navigate to: {config.PROJECT_URL}
-   Wait for the page to fully load (the Objects tab in the left sidebar is visible).
+1. Navigate to: {project_url}
+   Wait for the Objects tab in the left sidebar to be visible and loaded.
 
 2. In the left sidebar Objects list, find the row labelled "Parcel {parcel_id}".
-   RIGHT-CLICK on that row (not a regular click — use right-click to open the
-   context menu). A context menu should appear.
+   RIGHT-CLICK that row to open the context menu.
 
-3. In the context menu, click "Buildable Area" (or "Run Buildable Area").
-   A modal opens — click the "Run Buildable Area" button inside it.
-   Wait for the computation to finish: a "Calculating..." progress bar will appear
-   then disappear. This can take up to 2 minutes. Do not click anything else.
+3. In the context menu, click "Buildable Area".
+   A settings panel opens — click the "Run Buildable Area" button inside it.
+   Wait for the "Calculating..." progress bar to finish (up to 2 minutes).
 
-4. REQUIRED: After computation finishes, a floating panel shows "N objects selected"
-   with the buildable area in acres (e.g. "15.35 ac") and a "Copy to project" button.
-   Note the acres value, then click "Copy to project".
-   Wait for the panel to close before proceeding.
+4. REQUIRED: After computation finishes, a floating panel shows "N objects selected,
+   X.XX ac" and a "Copy to project" button. Note the acres value, then click
+   "Copy to project". Wait for the panel to close.
 
-5. REQUIRED: Before running New Analysis, hide all objects except the new
-   buildable area group you just created. In the Objects list, right-click each
-   item that is NOT the new "Buildable area" group (including the parcel polygon
-   "Parcel {parcel_id}" and any older buildable area groups) and choose "Hide"
-   from the context menu. Only the freshly created buildable area should be visible.
-
-6. Find the "New Analysis" button (sidebar header area) and click it.
-   A panel opens on the right.
-
-7. Wait for the installed capacity number to finish loading in the panel.
-   It is displayed as "X.XX MWp" — wait until it shows a non-zero value.
+5. Find the "New Analysis" button (top of sidebar) and click it.
+   A panel opens on the right showing "Installed capacity: X.XX MWp".
+   Wait until it shows a non-zero value.
    Convert to kW: multiply MWp × 1000.
+
+IMPORTANT — PLAYWRIGHT DOCUMENTATION:
+As you work, write a file called "{playwright_log}" that documents every UI
+element you interact with so this workflow can be replicated in Playwright
+without a vision AI. For each action, record:
+  - The step number and description
+  - How you located the element (CSS selector, role+name, text content, XPath)
+  - The exact selector string you used (most stable form you can determine)
+  - Whether it was a click, right-click, wait, or read
+  - Any timing notes (e.g. "waited 10s for progress bar to clear")
+
+Format each entry as:
+### Step N: <description>
+- **Located by**: <method>
+- **Selector**: `<selector>`
+- **Action**: <click|right_click|wait|read_text>
+- **Notes**: <timing, fallbacks, observations>
 
 Return:
 - installed_capacity_kw: the final value in kW as a float (MWp × 1000)
@@ -489,56 +498,55 @@ async def get_all_installed_capacities(
     parcels: list[dict],
 ) -> None:
     """
-    Multi-parcel Phase 3 (browser-use vision).  For each parcel:
-      - Toggle visibility (show only this parcel, hide others + old groups)
-      - Launch a browser-use agent to run buildable area + New Analysis; read kW
-      - Concurrently, run buildable-area-async via the API for a precise acres
-        value from the S3 result (used if the agent doesn't extract it).
+    Multi-parcel Phase 3 (browser-use vision).
 
-    Mutates each parcel dict in-place (buildable_area_acres, buildable_pct,
-    installed_capacity_kw).  Parcels not found in the project object list are
-    skipped with a log message.
+    Each parcel must have 'project_id' and 'project_url' set (populated by
+    main.py Phase 1 from PROJECT_URL_1 .. PROJECT_URL_N).  Each project
+    contains exactly one parcel — no visibility toggling needed.
 
-    Requires config: PROJECT_ID, PROJECT_URL.
+    For each parcel:
+      - Fetches parcel geometry via the objects API (for the API buildable area job)
+      - Fires a buildable-area-async API call in parallel (precise S3 acres)
+      - Runs a browser-use vision agent to drive the UI: right-click → Buildable
+        Area → Run → Copy to project → New Analysis → read kW
+      - Independently verifies the kW with a fresh Playwright session + screenshot
+
+    Mutates each parcel dict in-place.
     BROWSER_USE_API_KEY must be set in the environment.
     """
-    from objects import get_project_objects, get_parcels, show_only_parcel
+    from objects import get_project_objects, get_parcels
 
-    unresolved = [
-        name
-        for name, val in [
-            ("PROJECT_ID", config.PROJECT_ID),
-            ("PROJECT_URL", config.PROJECT_URL),
-        ]
-        if not val or val == "TODO"
-    ]
-    if unresolved:
-        print(
-            "[capacity] Skipping all parcels — unresolved config: "
-            + ", ".join(unresolved)
-        )
+    if not parcels:
+        print("[capacity] No parcels to process.")
         return
 
     screenshot_dir = Path(config.SCREENSHOT_DIR)
     screenshot_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build parcel_id → object mapping from the project's CRDT store.
-    all_objects = await get_project_objects(client, config.PROJECT_ID)
-    project_parcels = get_parcels(all_objects)
-    obj_by_parcel_id = {
-        obj["title"][len("Parcel "):]: obj
-        for obj in project_parcels
-        if obj.get("title", "").startswith("Parcel ")
-    }
+    # ── Phase A: Fetch geometry + fire all buildable-area-async API calls ─────
+    # Each parcel is in its own project; look up objects to find geometry.
+    # All API jobs fire in parallel so S3 results are ready (or nearly so)
+    # by the time the sequential browser loop reaches each parcel.
 
-    # ── Phase A: Fire all buildable-area-async API calls in parallel ─────────
-    # These are independent of each other and of the browser flow — each just
-    # POSTs geometry and polls S3.  Start them all now so S3 results are ready
-    # (or nearly so) by the time the sequential browser loop reaches each parcel.
-
-    async def _api_acres_for(parcel_id: str) -> float | None:
-        obj = obj_by_parcel_id.get(parcel_id)
+    async def _api_acres_for(parcel: dict) -> float | None:
+        parcel_id = str(parcel["parcel_id"])
+        project_id = parcel.get("project_id")
+        if not project_id or project_id == "TODO":
+            print(f"[capacity] {parcel_id}: no project_id — skipping API acres")
+            return None
+        try:
+            all_objects = await get_project_objects(client, project_id)
+        except Exception as exc:
+            print(f"[capacity] {parcel_id}: failed to fetch objects — {exc}")
+            return None
+        project_parcels = get_parcels(all_objects)
+        obj = next(
+            (o for o in project_parcels
+             if o.get("title", "").strip() == f"Parcel {parcel_id}"),
+            None,
+        )
         if not obj:
+            print(f"[capacity] {parcel_id}: not found in project objects")
             return None
         geom = obj.get("geom")
         if not geom:
@@ -553,37 +561,27 @@ async def get_all_installed_capacities(
         return calculate_buildable_acres(s3_result)
 
     api_tasks = {
-        str(p["parcel_id"]): asyncio.create_task(_api_acres_for(str(p["parcel_id"])))
+        str(p["parcel_id"]): asyncio.create_task(_api_acres_for(p))
         for p in parcels
     }
     print(f"[capacity] Fired {len(api_tasks)} parallel buildable-area API jobs")
 
-    # ── Phase B: Sequential browser loop (visibility isolation required) ─────
-    # Each iteration: isolate parcel → browser-use agent → collect results.
-    # The API tasks run in the background; we await each one's result only after
-    # its browser agent completes (it's almost certainly done by then).
+    # ── Phase B: Sequential browser loop ─────────────────────────────────────
+    # One parcel per project — no visibility toggling needed.
+    # Browser agents run sequentially to avoid resource contention.
 
     for i, parcel in enumerate(parcels, 1):
         parcel_id = str(parcel["parcel_id"])
-        print(f"[capacity] [{i}/{len(parcels)}] {parcel_id}")
+        project_url = parcel.get("project_url") or config.PROJECT_URL
+        print(f"[capacity] [{i}/{len(parcels)}] {parcel_id}  ({project_url.split('/')[-1].split('?')[0]})")
 
-        obj = obj_by_parcel_id.get(parcel_id)
-        if not obj:
-            print(
-                f"[capacity] {parcel_id}: not found in project objects — "
-                "add it to the project in the Glint UI and re-run"
-            )
-            continue
-
-        # Refresh object state so hide/show decisions are current.
-        all_objects = await get_project_objects(client, config.PROJECT_ID)
-        await show_only_parcel(client, config.PROJECT_ID, obj["id"], all_objects)
-
-        agent_result = await _run_agent_for_parcel(storage_state, parcel_id, screenshot_dir)
+        agent_result = await _run_agent_for_parcel(
+            storage_state, parcel_id, project_url, screenshot_dir
+        )
 
         # Independently verify kW and save a screenshot using a fresh Playwright session.
         verified_kw, verify_screenshot = await _verify_and_screenshot(
-            storage_state, parcel_id, screenshot_dir
+            storage_state, parcel_id, screenshot_dir, project_url=project_url
         )
 
         agent_kw = agent_result.installed_capacity_kw

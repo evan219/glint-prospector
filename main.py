@@ -35,24 +35,31 @@ async def main():
             )
 
         # ── Phase 1: Project Object Enumeration ───────────────────────────────
-        print(f"\n=== Phase 1: Project Parcels (project: {config.PROJECT_ID}) ===")
-        all_objects = await get_project_objects(client, config.PROJECT_ID)
-        project_parcels = get_parcels(all_objects)
-        if not project_parcels:
-            print("No parcels found in project — add parcels in the Glint UI and re-run.")
+        print(f"\n=== Phase 1: Project Parcels ({len(config.PROJECT_URLS)} project(s)) ===")
+        if not config.PROJECT_URLS:
+            print("No PROJECT_URL_* env vars set — add them to .env and re-run.")
             return
 
-        parcels = [
-            {
-                "parcel_id": obj["title"][len("Parcel "):].strip(),
-                "total_area_acres": None,
-                "buildable_area_acres": None,
-                "buildable_pct": None,
-                "installed_capacity_kw": None,
-            }
-            for obj in project_parcels
-            if obj.get("title", "").startswith("Parcel ")
-        ]
+        parcels = []
+        for project_url in config.PROJECT_URLS:
+            project_id = config._extract_project_id(project_url)
+            all_objects = await get_project_objects(client, project_id)
+            project_parcels = get_parcels(all_objects)
+            for obj in project_parcels:
+                if obj.get("title", "").startswith("Parcel "):
+                    parcels.append({
+                        "parcel_id": obj["title"][len("Parcel "):].strip(),
+                        "project_id": project_id,
+                        "project_url": project_url,
+                        "total_area_acres": None,
+                        "buildable_area_acres": None,
+                        "buildable_pct": None,
+                        "installed_capacity_kw": None,
+                    })
+
+        if not parcels:
+            print("No parcels found in any project — add parcels in Glint and re-run.")
+            return
         print(f"[project] {len(parcels)} parcel(s): {[p['parcel_id'] for p in parcels]}")
 
     # ── Phase 3: Per-Parcel Analysis ──────────────────────────────────────────

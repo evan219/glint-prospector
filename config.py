@@ -94,14 +94,25 @@ BUILDABLE_CONSTRAINTS = [
 
 SCREENSHOT_DIR = os.getenv("SCREENSHOT_DIR", "output/screenshots")
 
+# --- Multi-project support (one parcel per project, no visibility toggling) ---
+# Set PROJECT_URL_1 .. PROJECT_URL_N in .env.  Falls back to the legacy single
+# PROJECT_URL if no numbered URLs are present.
 PROJECT_URL = os.getenv("PROJECT_URL", "TODO")
 
-# PROJECT_ID: extracted from PROJECT_URL (.../projects/{id}?...) or set explicitly.
-_raw_project_url = PROJECT_URL
+PROJECT_URLS: list[str] = [
+    url
+    for url in [os.getenv(f"PROJECT_URL_{i}") for i in range(1, 20)]
+    if url
+] or ([PROJECT_URL] if PROJECT_URL != "TODO" else [])
+
+
+def _extract_project_id(url: str) -> str:
+    return url.split("/projects/")[-1].split("?")[0] if "/projects/" in url else "TODO"
+
+
+# Legacy single-project ID (kept for backward compat with objects.py imports).
 PROJECT_ID = os.getenv("PROJECT_ID") or (
-    _raw_project_url.split("/projects/")[-1].split("?")[0]
-    if "/projects/" in _raw_project_url
-    else "TODO"
+    _extract_project_id(PROJECT_URL) if PROJECT_URL != "TODO" else "TODO"
 )
 
 # DOM selectors (right-click element in DevTools → Copy → Copy selector)
