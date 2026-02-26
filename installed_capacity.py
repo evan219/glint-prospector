@@ -282,12 +282,50 @@ async def _run_playwright_for_parcel(
                 acres = await run_buildable_area_and_copy(page)
                 kw = await click_new_analysis_and_read_kw(page)
 
-                await page.screenshot(
-                    path=str(screenshot_dir / f"{parcel_id}_result.png")
-                )
                 print(
                     f"[capacity] {parcel_id}: playwright → {kw} kW, {acres} acres"
                 )
+
+                # Collapse sidebar so the map fills the viewport, then screenshot map only.
+                try:
+                    await page.click(_SEL_SIDEBAR_COLLAPSE, timeout=3_000)
+                    await page.wait_for_timeout(600)
+                except Exception:
+                    pass
+                # Remove "Viewing hint" tooltip and any other floating overlays via JS
+                await page.evaluate("""() => {
+                    document.querySelectorAll('*').forEach(el => {
+                        if (el.children.length === 0 &&
+                            el.textContent.trim().toLowerCase().includes('viewing hint')) {
+                            let node = el;
+                            for (let i = 0; i < 6; i++) {
+                                const p = node.parentElement;
+                                if (!p || p === document.body) break;
+                                // Walk up until we find a positioned/card-like container
+                                const style = getComputedStyle(p);
+                                if (style.position === 'absolute' ||
+                                    style.position === 'fixed' ||
+                                    p.className.includes('hint') ||
+                                    p.className.includes('tooltip') ||
+                                    p.className.includes('Hint') ||
+                                    p.className.includes('Tooltip')) {
+                                    p.remove();
+                                    return;
+                                }
+                                node = p;
+                            }
+                            node.remove();
+                        }
+                    });
+                }""")
+                try:
+                    await page.locator(_SEL_MAP_CONTAINER).screenshot(
+                        path=str(screenshot_dir / f"{parcel_id}_result.png")
+                    )
+                except Exception:
+                    await page.screenshot(
+                        path=str(screenshot_dir / f"{parcel_id}_result.png")
+                    )
                 return _ParcelResult(installed_capacity_kw=kw, buildable_area_acres=acres)
             finally:
                 await page.close()
