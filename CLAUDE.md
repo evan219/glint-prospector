@@ -1,212 +1,161 @@
 # CLAUDE.md — Glint Solar Prospecting Agent
 
-Best practices and agent workflow instructions for AI-assisted development on this project.
-Inspired by testing patterns from [cleak/tea-leaves](https://github.com/cleak/tea-leaves).
+Developer guide for Claude Code agents working on this repo.
 
 ---
 
-## Project Overview
+## Multi-Agent Development Workflow
 
-This agent automates solar parcel prospecting on `app.glintsolar.com`:
-- **Phase 0** — Playwright login → cookie extraction
-- **Phase 1** — PBF tile decode → parcel enumeration + property fetch
-- **Phase 2** — `buildable-area-async` POST → S3 poll → shapely area calc
-- **Phase 3** — Playwright DOM: Copy to project → New Analysis → read installed kW
-- **Phase 4** — Export `output/parcels.csv`
+All significant changes follow this three-phase pattern:
 
-Key fact: **Installed capacity is computed client-side** by Glint's JS bundles. It never
-appears in any API response. Phase 3 always requires Playwright to read the DOM.
+```
+Drafter → Reviewer → Testing
+```
 
----
+1. **Drafter** — implements the change (write/edit files)
+2. **Reviewer** — spawned via `Task` tool to read all changed files and return a structured `BUGS / RISKS / IMPROVEMENTS / VERDICT` report
+3. **Testing** — runs `python -m pytest tests/ -v` and confirms 29 passed, 1 xfailed
 
-## Before Writing Any Code
-
-1. **Read `config.py` first** — all known IDs, API constants, and constraint values live there.
-2. **Check the HAR findings in this file** (§ API Reference) before adding new endpoints.
-3. **Never hardcode org/portfolio IDs** inline — always reference `config.*`.
-4. **Never commit `.env`** — use `.env.example` for documentation.
+If the reviewer returns `REQUEST_CHANGES`, all must-fix items are resolved before proceeding.
+Never skip the testing phase — the test suite catches real bugs (e.g. the CRS reprojection
+fix discovered during review).
 
 ---
 
-## Testing Protocol
-
-### Verification Gate
-Run this before marking any task complete:
+## Setting Up `.env` for Testing
 
 ```bash
-# 1. Static checks
-python -m py_compile auth.py tiles.py parcels.py buildable_area.py installed_capacity.py main.py
-python -m mypy . --ignore-missing-imports
+cp .env.example .env
+```
 
-# 2. Unit tests
-pytest tests/ -v
+Edit `.env` with real credentials:
 
-# 3. Auth smoke test (fastest real integration check)
-python -c "
+```
+GLINT_EMAIL=your@email.com
+GLINT_PASSWORD=yourpassword
+```
+
+The `.env` file is gitignored and will never be committed.
+
+**For Claude Code to use credentials when running `python main.py` or integration tests:**
+- The file just needs to exist at the project root
+- `python-dotenv` loads it automatically at import time via `load_dotenv()` in `config.py`
+
+**Unit tests** (`python -m pytest tests/`) do NOT require real credentials —
+`tests/conftest.py` injects placeholder values so config.py can be imported.
+
+**Integration tests / end-to-end runs** require a populated `.env`.
+
+---
+
+## Phase 3 Selector Capture Protocol
+
+Phase 3 (`installed_capacity.py`) is ready to run but has 5 DOM selectors and 1 URL
+template that must be filled in first. All are guarded — the code safely skips parcels
+and prints which config keys are missing.
+
+### Steps to capture
+
+1. Open a terminal and run:
+   ```bash
+   HEADLESS=0 python -c "
+   import asyncio
+   from playwright.async_api import async_playwright
+   import config
+   async def run():
+       async with async_playwright() as p:
+           browser = await p.chromium.launch(headless=False)
+           ctx = await browser.new_context()
+           page = await ctx.new_page()
+           await page.goto(config.API_BASE)
+           input('Press Enter to close...')
+   asyncio.run(run())
+   "
+   ```
+2. Log in manually.
+3. Navigate to a parcel with buildable area.
+4. For each element below: right-click → **Inspect** → right-click the highlighted node
+   in DevTools → **Copy** → **Copy selector**.
+5. Set the corresponding env var in `.env` (or edit `config.py` directly).
+
+| Config key | Element to inspect |
+|---|---|
+| `PARCEL_RESULT_URL_TEMPLATE` | Copy the URL from the browser address bar after navigating to a parcel page. Template form: `{api_base}/parcel/{parcel_id}` |
+| `SEL_COPY_TO_PROJECT` | The "Copy to project" button on the parcel result page |
+| `SEL_NEW_ANALYSIS` | The "New Analysis" button on the project page |
+| `SEL_ANALYSIS_CONFIG` | The config `<select>` dropdown inside the New Analysis modal |
+| `SEL_ANALYSIS_SUBMIT` | The submit/run button inside the modal |
+| `SEL_CAPACITY_KW` | The element showing the installed capacity kW number |
+
+### Verification gate
+
+After filling in selectors, smoke-test with one parcel before running the full pipeline:
+
+```python
 import asyncio
-from auth import playwright_login, validate_session
-import httpx, config
+from playwright.async_api import async_playwright
+from auth import playwright_login
+from installed_capacity import get_installed_capacity
+import config
 
-async def test():
-    cookies = await playwright_login(config.EMAIL, config.PASSWORD)
-    async with httpx.AsyncClient(cookies=cookies) as c:
-        ok = await validate_session(c)
-        assert ok, 'Session validation failed'
-    print('Auth OK')
+async def smoke():
+    _, storage_state = await playwright_login(config.EMAIL, config.PASSWORD)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        ctx = await browser.new_context(storage_state=storage_state)
+        result = await get_installed_capacity(ctx, {"parcel_id": "YOUR_PARCEL_ID"})
+        print(f"Result: {result} kW")
+        await browser.close()
 
-asyncio.run(test())
-"
+asyncio.run(smoke())
 ```
 
-### Screenshot Review Protocol
-Every Playwright interaction **must** produce screenshots at key steps.
-Screenshots are saved to `output/screenshots/{parcel_id}_{step}_{label}.png`.
-
-After any Phase 3 run, review screenshots in order:
-| Step | Filename pattern | What to check |
-|------|-----------------|---------------|
-| 01 | `_01_project_loaded` | Correct project is open, map visible |
-| 02 | `_02_new_analysis_modal` | Modal opened, config profile dropdown visible |
-| 03 | `_03_layout_rendered` | Solar panels visible on map |
-| 04 | `_04_selector_miss` | Should NOT exist — means capacity selector needs updating |
-| 05 | `_05_capacity_found` | kW value visible and highlighted |
-| ERR | `_ERROR` | Inspect to diagnose what went wrong |
-
-If `_04_selector_miss` screenshots appear:
-1. Open DevTools on the rendered page
-2. Right-click the kW value → Copy → Copy selector
-3. Update `GLINT_CAPACITY_SELECTOR` in `.env`
-
-### Async Operation Testing
-For any new polling loop (S3, API), validate both paths:
-```python
-# Test success path
-result = await poll_s3_result("known-good-request-id")
-assert result is not None
-assert "features" in result
-
-# Test timeout path (use a fake ID)
-result = await poll_s3_result("00000000-0000-0000-0000-000000000000")
-assert result is None  # should timeout gracefully, not raise
-```
-
-### Result Validation Pattern
-After each phase, validate shape and content before proceeding:
-```python
-# Phase 1b validation
-assert all("parcel_id" in p for p in parcels), "Missing parcel_id"
-assert all(p["total_area_acres"] > 0 for p in parcels), "Zero-area parcel"
-
-# Phase 2 validation
-buildable = [p for p in parcels if p.get("buildable_area_acres") is not None]
-print(f"Phase 2: {len(buildable)}/{len(parcels)} parcels have buildable area")
-
-# Phase 3 validation
-with_capacity = [p for p in parcels if p.get("installed_capacity_kw")]
-print(f"Phase 3: {len(with_capacity)}/{len(buildable)} parcels have kW value")
-```
+Screenshots are saved to `output/screenshots/` at every step. Review them if the result
+is `None`.
 
 ---
 
-## Code Quality
+## API Reference (from HAR analysis, Feb 2026)
 
-### Style
-- Python 3.11+, async/await throughout
-- Type hints on all function signatures
-- `httpx.AsyncClient` for all API calls — never `requests`
-- `asyncio.Semaphore` for concurrency control (see `parcels.py`)
-
-### Error Handling
-- Never let a single parcel failure crash the whole run
-- All per-parcel operations return `None` on failure (not raise)
-- Log `[module] message` prefix on every print for traceability
-- On Playwright errors: always take a screenshot before returning `None`
-
-### Logging Convention
-```
-[auth]      — authentication and session
-[tiles]     — PBF tile decode and enumeration
-[parcels]   — parcel-properties and parcel-geometry API
-[buildable] — buildable-area-async and S3 polling
-[capacity]  — Phase 3 Playwright flow
-[main]      — orchestration and pipeline control
-```
-
-### Concurrency Rules
-- Parcel property fetches: `asyncio.Semaphore(MAX_CONCURRENT_PARCEL_CALLS)` — batched
-- Buildable area: **serial** per parcel — each POST is expensive and stateful
-- Phase 3: **serial** per parcel — Playwright context is shared, one page at a time
-- Tile downloads: batched in groups of 10 (see `tiles.py`)
+| Endpoint | Method | Description |
+|---|---|---|
+| `auth.glintsolar.com/login` | GET | Login page |
+| `auth.glintsolar.com/sessions/whoami` | GET | Session validation |
+| `app.glintsolar.com/api/pkg/parcels_{version}/{z}/{x}/{y}.pbf` | GET | PBF tile |
+| `app.glintsolar.com/api/parcels/parcel-properties` | GET | Parcel metadata |
+| `app.glintsolar.com/api/parcels/parcel-geometry` | GET | Parcel GeoJSON |
+| `app.glintsolar.com/api/geo-insights-v2/buildable-area-async` | POST | Start buildable-area job |
+| `glint-eu-west-1-geo-insights.s3.amazonaws.com/{portfolioId}/buildable-area/{requestId}.json` | GET | Poll buildable-area result |
+| Installed capacity | DOM only | Computed client-side by pvSegments bundle; no API endpoint |
 
 ---
 
-## API Reference (from HAR Analysis, Feb 2026)
+## Known Unknowns
 
-### Known Endpoints
-
-| Phase | Method | Endpoint | Notes |
-|-------|--------|----------|-------|
-| Auth | GET | `https://auth.glintsolar.com/sessions/whoami` | Validate session |
-| 1a | GET | `/api/pkg/parcels_{version}/{z}/{x}/{y}.pbf?packageId=USA` | PBF tiles |
-| 1b | GET | `/api/parcels/parcel-properties?packageId=USNY&id={id}&version={v}` | Lightweight metadata |
-| 1b | GET | `/api/parcels/parcel-geometry?id={id}&packageId=USNY&version={v}` | GeoJSON polygon |
-| 2 | POST | `/api/geo-insights-v2/buildable-area-async?orgId=...&portfolioId=...` | Kick off job |
-| 2 | GET | `https://glint-eu-west-1-geo-insights.s3.amazonaws.com/{portfolioId}/buildable-area/{requestId}.json` | Poll result |
-| 3 | GET | `/api/configurations?orgId=...&portfolioId=...` | Design config profiles |
-| 3 | GET | `/api/analyses?orgId=...&portfolioId=...&projectId=...` | List analyses |
-
-### Known IDs
-
-| Key | Value |
-|-----|-------|
-| `orgId` | `org_OoParhEkGMoVGWXY` |
-| `portfolioId` | `cus_EnumCTAzNbIUxQKl` |
-| Parcel version | `20250617` |
-| NYSEG BESS version | `20260109` |
-| Wetlands version | `20251001` |
-
-### Constraint Profile Note
-The UI's "Constraints Profile" dropdown (e.g. "BESS Capacity") auto-fills constraint
-values in the browser — there is no profile ID accepted by the API. All constraints are
-sent inline in the `buildable-area-async` POST body. The exact constraint values for the
-"BESS Capacity" profile are in `config.BUILDABLE_CONSTRAINTS`.
-
-### Phase 3 Key Finding
-Installed capacity is **never returned by any API**. It is computed client-side by:
-- `pvSegments-yd5TuR0N.js` (387 KB) — tiles panels onto buildable polygon
-- `createSolarPanels-CU3YJTdo.js` (10 KB) — creates panel objects, computes DC/AC
-
-Always use Playwright to read the kW value from the DOM after the layout renders.
+| Priority | Item | Owner |
+|---|---|---|
+| 🔴 CRITICAL | `PARCEL_RESULT_URL_TEMPLATE` — URL pattern to navigate to a parcel in the app | Needs headed session |
+| 🔴 CRITICAL | `SEL_COPY_TO_PROJECT` — button selector | Needs headed session |
+| 🔴 CRITICAL | `SEL_NEW_ANALYSIS` — button selector | Needs headed session |
+| 🔴 CRITICAL | `SEL_ANALYSIS_CONFIG` — dropdown selector in modal | Needs headed session |
+| 🔴 CRITICAL | `SEL_ANALYSIS_SUBMIT` — submit button selector | Needs headed session |
+| 🔴 CRITICAL | `SEL_CAPACITY_KW` — kW result DOM selector | Needs headed session |
+| 🟡 HIGH | Confirm `parcel-properties` response field names (`ownership_info`, `tot_val`, etc.) match live API | Run Phase 1b and inspect first result |
+| 🟡 HIGH | Confirm buildable-area result GeoJSON CRS (assumed WGS84) | Inspect actual S3 result |
+| 🟢 KNOWN GAP | Null geometry features in buildable-area result not handled (`test_null_geometry_skipped` is xfailed) | Low priority — add guard to `calculate_buildable_acres` |
 
 ---
 
-## Known Unknowns / Next Steps
+## Running the Pipeline
 
-| Priority | Item |
-|----------|------|
-| CRITICAL | Confirm `INSTALLED_CAPACITY_SELECTOR` — run Phase 3 headed, inspect DOM |
-| CRITICAL | Confirm "Copy to project" → "New Analysis" button selectors in `installed_capacity.py` |
-| HIGH | Capture POST `/api/analyses` from a complete Phase 3 HAR (recording stopped at modal open) |
-| HIGH | Confirm `project_url` pattern: is it `/projects/{id}` or `/portfolio/{portfolioId}/project/{id}`? |
-| MEDIUM | Add retry logic for S3 poll (transient 403s observed on cold starts) |
-| MEDIUM | Tile enumeration: validate PBF field name for parcel ID (may be `id` not `parcel_id`) |
-| LOW | Consider caching parcel-geometry responses to avoid redundant fetches in Phase 3 |
+```bash
+# Unit tests (no credentials needed)
+python -m pytest tests/ -v
 
----
-
-## Output Artifacts
-
-After a successful run:
-```
-output/
-├── parcels.csv              # Full results table
-└── screenshots/
-    ├── {parcel_id}_01_project_loaded.png
-    ├── {parcel_id}_02_new_analysis_modal.png
-    ├── {parcel_id}_03_layout_rendered.png
-    └── {parcel_id}_05_capacity_found.png
+# Full end-to-end (requires .env with real credentials)
+python main.py
 ```
 
-The CSV schema:
-`parcel_id, owner_name, parcel_address, mail_address, total_area_acres, land_use,
-assessed_value, buildable_area_acres, buildable_pct, installed_capacity_kw, lat, lon`
+Output: `output/parcels.csv`
+
+Phase 3 screenshots: `output/screenshots/{parcel_id}_0{1-4}_*.png`

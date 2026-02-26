@@ -6,7 +6,9 @@ Phase 2: Buildable Area Analysis
 """
 import asyncio
 import httpx
+from pyproj import Transformer
 from shapely.geometry import shape
+from shapely.ops import transform as shp_transform
 import config
 
 
@@ -52,7 +54,7 @@ async def poll_s3_result(request_id: str) -> dict | None:
         f"{config.S3_BASE}/{config.PORTFOLIO_ID}"
         f"/buildable-area/{request_id}.json"
     )
-    async with httpx.AsyncClient() as s3_client:
+    async with httpx.AsyncClient(timeout=30.0) as s3_client:
         for attempt in range(config.S3_POLL_MAX_ATTEMPTS):
             r = await s3_client.get(url)
             if r.status_code == 200:
@@ -64,14 +66,32 @@ async def poll_s3_result(request_id: str) -> dict | None:
     return None
 
 
+def _utm_transformer() -> object:
+    """
+    Returns a WGS84 → UTM transformer for the configured bounding box centroid.
+    GeoJSON coordinates are in geographic degrees; shapely.area on geographic coords
+    returns sq-degrees, not sq-metres — reprojection to UTM is required for accuracy.
+    """
+    lon = (config.BBOX["lon_min"] + config.BBOX["lon_max"]) / 2
+    lat = (config.BBOX["lat_min"] + config.BBOX["lat_max"]) / 2
+    zone = int((lon + 180) / 6) + 1
+    epsg = 32600 + zone if lat >= 0 else 32700 + zone
+    return Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform
+
+
 def calculate_buildable_acres(geojson: dict) -> float:
     """
     Sums the area of all features in a GeoJSON FeatureCollection.
+    Reprojects WGS84 → UTM so shapely computes square metres, not square degrees.
     Returns total buildable area in acres.
     """
+    features = geojson.get("features", [])
+    if not features:
+        return 0.0
+    transformer = _utm_transformer()
     total_sqm = sum(
-        shape(feature["geometry"]).area
-        for feature in geojson.get("features", [])
+        shp_transform(transformer, shape(f["geometry"])).area
+        for f in features
     )
     return round(total_sqm / 4046.86, 2)
 
@@ -94,8 +114,8 @@ async def run_buildable_area(
         return parcel
 
     buildable_acres = calculate_buildable_acres(result)
-    total_acres = parcel.get("total_area_acres") or 1
+    total_acres = parcel.get("total_area_acres") or 0
     parcel["buildable_area_acres"] = buildable_acres
-    parcel["buildable_pct"] = round(buildable_acres / total_acres * 100, 1) if total_acres else 0
+    parcel["buildable_pct"] = round(buildable_acres / total_acres * 100, 1) if total_acres else None
 
     return parcel

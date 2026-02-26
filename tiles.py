@@ -57,7 +57,7 @@ def decode_parcel_ids(pbf_bytes: bytes) -> list[str]:
     Relevant fields: parcel_id, ownership_info, area, land_use, tot_val, zoning
     """
     tile = mapbox_vector_tile.decode(pbf_bytes)
-    layer = tile.get("parcels", {})
+    layer = tile.get("main", {})
     features = layer.get("features", [])
     ids = []
     for feature in features:

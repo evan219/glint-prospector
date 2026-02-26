@@ -31,7 +31,13 @@ async def get_parcel_properties(client: httpx.AsyncClient, parcel_id: str) -> di
         print(f"[parcels] parcel-properties failed for {parcel_id}: {r.status_code}")
         return None
 
-    data = r.json()
+    if not r.content:
+        return None
+
+    try:
+        data = r.json()
+    except Exception:
+        return None
     return {
         "parcel_id": data.get("parcel_id", parcel_id),
         "owner_name": data.get("ownership_info", ""),
