@@ -77,28 +77,51 @@ You are automating the Glint Solar web app to add parcels to new projects.
    - After both steps, parcels that are disqualified under BESS Capacity will be highlighted RED
      on the map. Only add parcels that are NOT covered in red.
 
+== LAYER PROTECTION ==
+CRITICAL: After the setup steps, NEVER click any eye icons again for any reason.
+The eye icons toggle layers on/off — clicking them mid-run will break the red overlay.
+If you think a layer is off, just proceed; do not attempt to re-enable it by clicking eye icons.
+
 == ADDING PARCELS (repeat {TARGET_PARCEL_COUNT} times) ==
 
 Keep a list of parcel IDs you have already added. Never add the same parcel ID twice.
-After each parcel, pan the map to a NEW area so you are looking at fresh parcels.
 
-For each parcel that is NOT completely covered in red:
+To click different parcels on the map canvas, use evaluate() to dispatch a mouse click
+at a specific pixel position — do NOT just click the canvas element (that always hits center).
+Use different canvas positions for each parcel:
+  - Parcel N=1: evaluate canvas click at (50%, 50%) — center
+  - Parcel N=2: evaluate canvas click at (75%, 35%) — upper right
+  - Parcel N=3: evaluate canvas click at (25%, 65%) — lower left
+  - Parcel N=4: use Location Search to navigate to a NEW coordinate first:
+      type "{coord}" shifted slightly, e.g. "42.620, -78.710", then click that result,
+      then evaluate canvas click at (50%, 50%)
+  - Parcel N=5: navigate to "42.635, -78.730", click canvas at (60%, 40%)
+  - Parcel N=6: navigate to "42.615, -78.705", click canvas at (40%, 60%)
 
-5. Click a parcel polygon on the map that you have NOT clicked before.
-   A side panel should open showing parcel details including a parcel ID number.
+Example evaluate to click canvas at 75% x, 35% y:
+  (function(){{
+    const c = document.querySelector('canvas[aria-label="Map"]');
+    const r = c.getBoundingClientRect();
+    const x = r.left + r.width * 0.75;
+    const y = r.top + r.height * 0.35;
+    c.dispatchEvent(new MouseEvent('click', {{bubbles:true, clientX:x, clientY:y}}));
+  }})()
+
+For each parcel:
+
+5. Click the map canvas at the target pixel position using evaluate (see above).
+   A side panel will open showing the parcel ID.
    - READ the parcel ID from the side panel BEFORE proceeding.
-   - If this parcel ID is already in your list of added parcels, close the panel and
-     click a DIFFERENT spot on the map.
-   - If the parcel appears entirely covered in red, close the panel and try elsewhere.
+   - If this parcel ID is already in your added list, try a different canvas position.
+   - If the parcel appears entirely covered in red, try a different canvas position.
 
-6. In the side panel, find and click "Copy polygon to project".
+6. In the side panel, click "Copy polygon to project".
    A "Save to project" popup/modal appears.
 
 7. In the popup:
    a. Click the "Add to project" dropdown
    b. Select "+ New project" (first option in the dropdown)
-   c. A "Project name" text field appears — it may be pre-filled with a city name.
-      CLEAR the field and type the project name: "BU - {{N}}"
+   c. A "Project name" text field appears — CLEAR it and type: "BU - {{N}}"
       where {{N}} is the sequential number (BU - 1, BU - 2, ... BU - {TARGET_PARCEL_COUNT})
    d. Click the purple "Create new project" button
    e. Wait for the project to be created and the modal to close.
@@ -109,20 +132,15 @@ For each parcel that is NOT completely covered in red:
 
 9. Close the left project/parcel panel by clicking the X button in its top-right corner.
 
-10. Note the URL in the browser address bar — it contains the new project ID.
-    Record it as the project_url for this entry. Add the parcel ID to your used list.
-
-11. PAN THE MAP to a new area (drag the map or use arrow keys) so you see different
-    parcels, then repeat steps 5-10 for the next non-red, not-yet-added parcel.
+10. Note the URL in the browser address bar — record it as project_url. Add parcel ID to list.
 
 == IMPORTANT CONSTRAINTS ==
-- NEVER add the same parcel ID more than once — check your list before each addition
+- NEVER add the same parcel ID more than once
 - SKIP parcels that are completely covered in red (constrained under BESS Capacity)
-- Only add parcels that have clear (non-red) land area
 - Name projects sequentially: BU - 1, BU - 2, ..., BU - {TARGET_PARCEL_COUNT}
 - Add exactly {TARGET_PARCEL_COUNT} parcels total
-- After each parcel is added, close the project panel and pan the map before continuing
 - Do NOT click any "?" help icons or question mark buttons — they navigate away from the page
+- Do NOT click any eye icons after setup is complete
 
 == PLAYWRIGHT DOCUMENTATION ==
 As you work, write a file at "{LOG_PATH}" documenting EVERY UI element
