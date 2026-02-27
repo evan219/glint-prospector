@@ -292,31 +292,38 @@ async def _run_playwright_for_parcel(
                     await page.wait_for_timeout(600)
                 except Exception:
                     pass
-                # Remove "Viewing hint" tooltip and any other floating overlays via JS
+                # Dismiss "Viewing hint" tooltip: click map centre, then remove via JS
+                try:
+                    map_el = page.locator(_SEL_MAP_CONTAINER)
+                    box = await map_el.bounding_box()
+                    if box:
+                        await page.mouse.click(
+                            box["x"] + box["width"] / 2,
+                            box["y"] + box["height"] / 2,
+                        )
+                    await page.wait_for_timeout(400)
+                except Exception:
+                    pass
                 await page.evaluate("""() => {
-                    document.querySelectorAll('*').forEach(el => {
-                        if (el.children.length === 0 &&
-                            el.textContent.trim().toLowerCase().includes('viewing hint')) {
+                    // Remove any element (not just leaf) whose text starts with
+                    // "Viewing hint"; walk up to its nearest positioned ancestor.
+                    for (const el of document.querySelectorAll('*')) {
+                        if (el.textContent.trim().toLowerCase().startsWith('viewing hint')) {
                             let node = el;
-                            for (let i = 0; i < 6; i++) {
+                            for (let i = 0; i < 10; i++) {
                                 const p = node.parentElement;
-                                if (!p || p === document.body) break;
-                                // Walk up until we find a positioned/card-like container
-                                const style = getComputedStyle(p);
-                                if (style.position === 'absolute' ||
-                                    style.position === 'fixed' ||
-                                    p.className.includes('hint') ||
-                                    p.className.includes('tooltip') ||
-                                    p.className.includes('Hint') ||
-                                    p.className.includes('Tooltip')) {
+                                if (!p || p.tagName === 'BODY') { node.remove(); return; }
+                                const s = getComputedStyle(p);
+                                if (s.position === 'absolute' || s.position === 'fixed') {
                                     p.remove();
                                     return;
                                 }
                                 node = p;
                             }
                             node.remove();
+                            return;
                         }
-                    });
+                    }
                 }""")
                 try:
                     await page.locator(_SEL_MAP_CONTAINER).screenshot(
