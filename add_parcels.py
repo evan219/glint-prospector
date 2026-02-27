@@ -90,45 +90,55 @@ After re-enabling, continue — do not touch it again.
 
 NEVER click the Cadastral eye icon after setup either.
 
-== ADDING PARCELS (repeat {TARGET_PARCEL_COUNT} times) ==
+== FINDING VALID PARCELS ==
 
 Keep a list of parcel IDs you have already added. Never add the same parcel ID twice.
 
-To click different parcels on the map canvas, use evaluate() to dispatch a mouse click
-at a specific pixel position — do NOT just click the canvas element (that always hits center).
-Use different canvas positions for each parcel:
-  - Parcel N=1: evaluate canvas click at (50%, 50%) — center
-  - Parcel N=2: evaluate canvas click at (75%, 35%) — upper right
-  - Parcel N=3: evaluate canvas click at (25%, 65%) — lower left
-  - Parcel N=4: use Location Search to navigate to a NEW coordinate first:
-      type "{coord}" shifted slightly, e.g. "42.620, -78.710", then click that result,
-      then evaluate canvas click at (50%, 50%)
-  - Parcel N=5: navigate to "42.635, -78.730", click canvas at (60%, 40%)
-  - Parcel N=6: navigate to "42.615, -78.705", click canvas at (40%, 60%)
+SCOUTING STRATEGY — do this before adding any parcel:
+- Zoom OUT (click Zoom Out button 2-3 times) to see a wider area
+- Scan the map screenshot for areas that are NOT red (look for green, white, or yellow parcels)
+- If the ENTIRE visible area is red, you must navigate to a new location:
+  1. First try panning: drag the map by dispatching mousedown → mousemove → mouseup on canvas
+  2. If still all red, use Location Search to jump to the alternate coordinate: "42.709677, -78.814508"
+  3. Then zoom back in (3-4 times) to see individual parcels
+- Once you see non-red parcels, zoom back in to zoom ~14 before clicking them
 
-Example evaluate to click canvas at 75% x, 35% y:
+TO PAN THE MAP by dragging (use evaluate):
   (function(){{
     const c = document.querySelector('canvas[aria-label="Map"]');
     const r = c.getBoundingClientRect();
-    const x = r.left + r.width * 0.75;
-    const y = r.top + r.height * 0.35;
+    const cx = r.left + r.width * 0.5, cy = r.top + r.height * 0.5;
+    c.dispatchEvent(new MouseEvent('mousedown', {{bubbles:true, clientX:cx, clientY:cy}}));
+    c.dispatchEvent(new MouseEvent('mousemove', {{bubbles:true, clientX:cx+300, clientY:cy}}));
+    c.dispatchEvent(new MouseEvent('mouseup',   {{bubbles:true, clientX:cx+300, clientY:cy}}));
+  }})()
+  Vary the offset (+300, -300, etc.) to pan in different directions. Wait 1s after dragging.
+
+TO CLICK A SPECIFIC POSITION on the canvas (use evaluate):
+  (function(){{
+    const c = document.querySelector('canvas[aria-label="Map"]');
+    const r = c.getBoundingClientRect();
+    const x = r.left + r.width * 0.XX;   // replace 0.XX with fraction like 0.5, 0.7, 0.3
+    const y = r.top  + r.height * 0.YY;  // replace 0.YY with fraction like 0.5, 0.4, 0.6
     c.dispatchEvent(new MouseEvent('click', {{bubbles:true, clientX:x, clientY:y}}));
   }})()
+  Use different positions for each parcel attempt. Never click the same position twice in a row.
 
 For each parcel:
 
 5. Before clicking any parcel, look at the map screenshot carefully:
    - Is there a red overlay visible on parcels? If NOT, the constraints layer is off —
-     click the constraints eye icon once to re-enable it, then wait 2 seconds for it to render.
-   - Only proceed to click a parcel once you can see the red overlay is active.
+     click the constraints eye icon once to re-enable it, then wait 2 seconds.
+   - Can you see any non-red parcel areas in the current view?
+     If the whole screen is red, zoom out and/or pan/navigate to find non-red areas first.
 
-6. Click the map canvas at the target pixel position using evaluate (see above).
+6. Click the canvas at a position that looks non-red, using evaluate (see above).
    A side panel will open showing the parcel ID.
-   - READ the parcel ID from the side panel BEFORE proceeding.
-   - If this parcel ID is already in your added list, try a different canvas position.
-   - Look at the map screenshot: is the selected parcel area mostly covered in red?
-     If YES — it is constrained. Close the panel and try a different canvas position.
-     If NO (green, yellow, or white) — it is valid. Proceed to step 7.
+   - READ the parcel ID BEFORE proceeding.
+   - If already in your added list → close panel, click a different position.
+   - Check the screenshot: is the clicked parcel mostly red?
+     YES → constrained, close panel, try a different position.
+     NO (green/white/yellow) → valid, proceed to step 7.
 
 7. In the side panel, click "Copy polygon to project".
    A "Save to project" popup/modal appears.
