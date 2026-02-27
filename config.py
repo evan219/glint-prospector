@@ -86,6 +86,10 @@ BUILDABLE_CONSTRAINTS = [
     },
 ]
 
+# --- Phase 1: Parcel Discovery & Project Creation ---
+PORTFOLIO_URL = os.getenv("PORTFOLIO_URL", "TODO")
+COORDINATE_START = os.getenv("COORDINATE_START", "")  # "lat, lon"
+
 # --- Phase 3: Installed Capacity (Playwright DOM flow) ---
 # PROJECT_URL: URL of a Glint project containing the parcel(s) to analyse.
 # Set via .env after manually creating a project and adding parcels.
