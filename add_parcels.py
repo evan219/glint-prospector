@@ -77,10 +77,18 @@ You are automating the Glint Solar web app to add parcels to new projects.
    - After both steps, parcels that are disqualified under BESS Capacity will be highlighted RED
      on the map. Only add parcels that are NOT covered in red.
 
-== LAYER PROTECTION ==
-CRITICAL: After the setup steps, NEVER click any eye icons again for any reason.
-The eye icons toggle layers on/off — clicking them mid-run will break the red overlay.
-If you think a layer is off, just proceed; do not attempt to re-enable it by clicking eye icons.
+== LAYER PROTECTION — READ THIS CAREFULLY ==
+IMPORTANT: The red constraint overlay does NOT block parcel selection.
+You can click on a red parcel polygon and the side panel will open normally.
+The red color is only INFORMATION — it tells you to skip that parcel, not that you can't click.
+Do NOT turn off the constraints layer to "see better" — the red is the whole point.
+
+After setup, NEVER click the constraints eye icon for any reason.
+Exception: if you notice the constraints eye icon has a slash through it (layer is off),
+you MUST click it once to turn it back on before selecting any more parcels.
+After re-enabling, continue — do not touch it again.
+
+NEVER click the Cadastral eye icon after setup either.
 
 == ADDING PARCELS (repeat {TARGET_PARCEL_COUNT} times) ==
 
@@ -109,16 +117,23 @@ Example evaluate to click canvas at 75% x, 35% y:
 
 For each parcel:
 
-5. Click the map canvas at the target pixel position using evaluate (see above).
+5. Before clicking any parcel, look at the map screenshot carefully:
+   - Is there a red overlay visible on parcels? If NOT, the constraints layer is off —
+     click the constraints eye icon once to re-enable it, then wait 2 seconds for it to render.
+   - Only proceed to click a parcel once you can see the red overlay is active.
+
+6. Click the map canvas at the target pixel position using evaluate (see above).
    A side panel will open showing the parcel ID.
    - READ the parcel ID from the side panel BEFORE proceeding.
    - If this parcel ID is already in your added list, try a different canvas position.
-   - If the parcel appears entirely covered in red, try a different canvas position.
+   - Look at the map screenshot: is the selected parcel area mostly covered in red?
+     If YES — it is constrained. Close the panel and try a different canvas position.
+     If NO (green, yellow, or white) — it is valid. Proceed to step 7.
 
-6. In the side panel, click "Copy polygon to project".
+7. In the side panel, click "Copy polygon to project".
    A "Save to project" popup/modal appears.
 
-7. In the popup:
+8. In the popup:
    a. Click the "Add to project" dropdown
    b. Select "+ New project" (first option in the dropdown)
    c. A "Project name" text field appears — CLEAR it and type: "BU - {{N}}"
@@ -126,13 +141,13 @@ For each parcel:
    d. Click the purple "Create new project" button
    e. Wait for the project to be created and the modal to close.
 
-8. After the project is created, an object detail pane opens on the RIGHT side.
+9. After the project is created, an object detail pane opens on the RIGHT side.
    It shows 4 type options: "PV", "BESS", "Exclude", "Other"
    Click "Other" (the 4th option, rightmost).
 
-9. Close the left project/parcel panel by clicking the X button in its top-right corner.
+10. Close the left project/parcel panel by clicking the X button in its top-right corner.
 
-10. Note the URL in the browser address bar — record it as project_url. Add parcel ID to list.
+11. Note the URL in the browser address bar — record it as project_url. Add parcel ID to list.
 
 == IMPORTANT CONSTRAINTS ==
 - NEVER add the same parcel ID more than once
