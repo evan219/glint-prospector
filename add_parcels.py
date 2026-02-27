@@ -67,12 +67,15 @@ You are automating the Glint Solar web app to add parcels to new projects.
    - You should now see parcel boundaries drawn on the map
 
 4. Enable the Constraints overlay and set the correct profile:
-   - Click the "Constraints" button in the top-right area of the map (separate from Layers)
-   - A constraints panel will open
-   - Find the constraint profile selector (dropdown or tabs) and switch it to "BESS Capacity"
-     (it may currently show "Steepness" or another default — you MUST change it to "BESS Capacity")
-   - Once the correct profile is active, disqualified parcels will be highlighted in RED
-   - Only parcels that are NOT covered in red under the BESS Capacity profile are valid targets
+   - In the top-right area of the map, find the Constraints control. It has TWO parts:
+     a. An EYE ICON to the LEFT of the "Constraints" button (the eye may have a slash through it,
+        meaning it is currently hidden). Click this eye icon to enable the red overlay on the map.
+        After clicking, the eye icon should appear without the slash (visible).
+     b. The "Constraints" button itself — click this to open the constraints settings panel.
+   - In the settings panel, find the constraint profile selector (dropdown or tabs) and switch
+     it to "BESS Capacity" (it may default to "Steepness" — you MUST change it).
+   - After both steps, parcels that are disqualified under BESS Capacity will be highlighted RED
+     on the map. Only add parcels that are NOT covered in red.
 
 == ADDING PARCELS (repeat {TARGET_PARCEL_COUNT} times) ==
 For each parcel that is NOT completely covered in red:
