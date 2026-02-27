@@ -78,13 +78,20 @@ You are automating the Glint Solar web app to add parcels to new projects.
      on the map. Only add parcels that are NOT covered in red.
 
 == ADDING PARCELS (repeat {TARGET_PARCEL_COUNT} times) ==
+
+Keep a list of parcel IDs you have already added. Never add the same parcel ID twice.
+After each parcel, pan the map to a NEW area so you are looking at fresh parcels.
+
 For each parcel that is NOT completely covered in red:
 
-5. Click the parcel polygon on the map.
-   A side panel should open on the left or right showing parcel details.
+5. Click a parcel polygon on the map that you have NOT clicked before.
+   A side panel should open showing parcel details including a parcel ID number.
+   - READ the parcel ID from the side panel BEFORE proceeding.
+   - If this parcel ID is already in your list of added parcels, close the panel and
+     click a DIFFERENT spot on the map.
+   - If the parcel appears entirely covered in red, close the panel and try elsewhere.
 
-6. In the side panel, find and click "Copy polygon to project"
-   (it may also be labelled "Add to project" or similar).
+6. In the side panel, find and click "Copy polygon to project".
    A "Save to project" popup/modal appears.
 
 7. In the popup:
@@ -102,18 +109,20 @@ For each parcel that is NOT completely covered in red:
 
 9. Close the left project/parcel panel by clicking the X button in its top-right corner.
 
-10. Note the URL in the browser address bar — it should contain the new project ID.
-    Record it as the project_url for this entry.
+10. Note the URL in the browser address bar — it contains the new project ID.
+    Record it as the project_url for this entry. Add the parcel ID to your used list.
 
-11. Click somewhere on the map to deselect, then repeat steps 5-10 for the next
-    non-red parcel. Skip any parcel that is entirely covered in red.
+11. PAN THE MAP to a new area (drag the map or use arrow keys) so you see different
+    parcels, then repeat steps 5-10 for the next non-red, not-yet-added parcel.
 
 == IMPORTANT CONSTRAINTS ==
-- SKIP parcels that are completely covered in red (constrained/disqualified)
+- NEVER add the same parcel ID more than once — check your list before each addition
+- SKIP parcels that are completely covered in red (constrained under BESS Capacity)
 - Only add parcels that have clear (non-red) land area
 - Name projects sequentially: BU - 1, BU - 2, ..., BU - {TARGET_PARCEL_COUNT}
 - Add exactly {TARGET_PARCEL_COUNT} parcels total
-- After each parcel is added, close the project panel before moving to the next
+- After each parcel is added, close the project panel and pan the map before continuing
+- Do NOT click any "?" help icons or question mark buttons — they navigate away from the page
 
 == PLAYWRIGHT DOCUMENTATION ==
 As you work, write a file at "{LOG_PATH}" documenting EVERY UI element
